@@ -1,0 +1,34 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "lorathresh"
+version = "0.1.0"
+description = "Where and why LoRA stops matching full fine-tuning: a rank x data-scale study with SVD oracle truncation."
+requires-python = ">=3.10"
+# Lower bounds for now; pin exact versions once the Kaggle environment is verified (Phase 1).
+dependencies = [
+    "sqlglot>=25",
+    "pyyaml>=6",
+    "pandas>=2",
+    "matplotlib>=3.8",
+]
+
+[project.optional-dependencies]
+gpu = [
+    "torch>=2.3",
+    "transformers>=4.51",  # Qwen3 support
+    "peft>=0.13",
+    "accelerate>=1.0",
+    "datasets>=3.0",
+    "bitsandbytes>=0.44",
+]
+vllm = ["vllm>=0.6"]
+dev = ["pytest>=8"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
