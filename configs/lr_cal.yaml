@@ -1,0 +1,23 @@
+# Phase 3: learning-rate calibration on small data, 1 seed.
+# Choose the best LR per method and rank bucket from this, then fill in grid_*.yaml.
+# Record how sensitive accuracy is to LR: it's the evidence that the rank sweep measures rank, not effective LR.
+defaults:
+  model: Qwen/Qwen3-0.6B-Base
+  batch_size: 32
+  n_eval: 500
+  seed: 0
+
+blocks:
+  - task: facts
+    n: 1000
+    epochs: 10
+    method: [full, lora]
+    rank: [4, 64]
+    lr: {full: [1.0e-5, 3.0e-5, 1.0e-4], lora: [1.0e-4, 3.0e-4, 1.0e-3]}
+
+  - task: sql
+    n: 2000
+    epochs: 2
+    method: [full, lora]
+    rank: [4, 64]
+    lr: {full: [1.0e-5, 3.0e-5, 1.0e-4], lora: [1.0e-4, 3.0e-4, 1.0e-3]}

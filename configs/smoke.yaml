@@ -1,0 +1,14 @@
+# Tiny end-to-end check of the whole pipeline (runs on a laptop): base -> full -> lora on 50 facts.
+defaults:
+  model: Qwen/Qwen3-0.6B-Base
+  batch_size: 16
+  n_eval: 50
+  max_steps: 40
+
+blocks:
+  - task: facts
+    n: 50
+    method: [base, full, lora]
+    rank: [4, 16]
+    seed: [0]
+    lr: {full: 1.0e-4, lora: 1.0e-3}

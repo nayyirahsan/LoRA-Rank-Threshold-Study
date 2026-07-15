@@ -1,0 +1,23 @@
+# Ablations, run after the main grids.
+#  - rsLoRA (alpha/sqrt(r)): does fixing how update size scales with rank close the high-rank gap? (H2(b), optimization side)
+#  - QLoRA (4-bit NF4 base): is there a rank-independent floor from quantization error?
+# The matching standard-scaling fp16 LoRA runs already exist in grid_facts.yaml, so the registry skips them.
+defaults:
+  model: Qwen/Qwen3-0.6B-Base
+  batch_size: 32
+  n_eval: 1000
+  epochs: 10
+  task: facts
+  n: 16000
+
+blocks:
+  - method: lora
+    scaling: rslora
+    rank: [4, 64, 256]
+    seed: [0, 1]
+    lr: {lora: {4: 3.0e-4, 64: 3.0e-4, 256: 3.0e-4}}   # PLACEHOLDER: rsLoRA changes update size, so recalibrate at r=64
+
+  - method: qlora
+    rank: [4, 64, 256]
+    seed: [0]
+    lr: {qlora: {4: 3.0e-4, 64: 3.0e-4, 256: 3.0e-4}}  # same LR as the fp16 LoRA runs, to isolate quantization

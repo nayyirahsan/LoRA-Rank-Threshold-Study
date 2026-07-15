@@ -1,0 +1,15 @@
+# H1 main grid, skill/format side: rank sweep at a fixed training-set size.
+# LRs are PLACEHOLDERS until configs/lr_cal.yaml has run.
+defaults:
+  model: Qwen/Qwen3-0.6B-Base
+  batch_size: 32
+  n_eval: 1000
+  epochs: 2
+
+blocks:
+  - task: sql
+    n: 10000
+    method: [base, full, lora]
+    rank: [1, 2, 4, 8, 16, 32, 64, 128]
+    seed: [0, 1, 2]
+    lr: {full: 3.0e-5, lora: {1: 3.0e-4, 2: 3.0e-4, 4: 3.0e-4, 8: 3.0e-4, 16: 3.0e-4, 32: 3.0e-4, 64: 3.0e-4, 128: 3.0e-4}}

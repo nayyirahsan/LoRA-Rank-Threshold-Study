@@ -1,0 +1,16 @@
+# H1 main grid, knowledge-injection side: rank x number of facts.
+# Epochs are fixed, so the token budget scales with N and every fact gets the same number of passes.
+# LRs are PLACEHOLDERS until configs/lr_cal.yaml has run. Rank 1 and 256 inherit from the nearest calibrated bucket.
+defaults:
+  model: Qwen/Qwen3-0.6B-Base
+  batch_size: 32
+  n_eval: 1000
+  epochs: 10
+
+blocks:
+  - task: facts
+    n: [1000, 4000, 16000]
+    method: [base, full, lora]
+    rank: [1, 4, 16, 64, 256]
+    seed: [0, 1]
+    lr: {full: 3.0e-5, lora: {1: 3.0e-4, 4: 3.0e-4, 16: 3.0e-4, 64: 3.0e-4, 256: 3.0e-4}}
