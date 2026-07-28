@@ -72,6 +72,20 @@ python -m venv .venv && .venv/bin/pip install -e ".[dev,gpu]"
 
 ## Kaggle runbook (2×T4)
 
+**One command, unattended (batch kernel):** with a Kaggle API token in `~/.kaggle/kaggle.json`:
+
+```bash
+python scripts/kaggle_launch.py push lr_cal     # submit: 2×T4, internet on, private kernel
+python scripts/kaggle_launch.py status lr_cal
+python scripts/kaggle_launch.py pull lr_cal     # registry, logs, tables, figures → results/kaggle/lr_cal/
+```
+
+The kernel clones this repo, runs a full-FT memory check (and switches to micro-batching if it runs
+out of memory), runs the grid on both GPUs with `scripts/run_parallel.py`, and leaves results in the
+kernel output. `lr_cal` needs no Hugging Face token. The later grids save full-FT checkpoints for the
+oracle, which exceed Kaggle's 20GB output limit, so pass `-- --push-repo <hf-user>/lorathresh-ckpts`
+with an `HF_TOKEN` attached to the kernel.
+
 **Easiest path: [`notebooks/kaggle_runner.ipynb`](notebooks/kaggle_runner.ipynb).** It covers setup,
 the throughput and memory gate, launching both shards, progress checks, the oracle sweep, and
 aggregation. The registry and checkpoints mirror to your private Hub repo, so every session resumes.
