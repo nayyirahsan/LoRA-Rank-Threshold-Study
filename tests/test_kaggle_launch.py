@@ -36,6 +36,48 @@ def test_unknown_grid_rejected(tmp_path):
         kaggle_launch.render("nope", "u", [], tmp_path)
 
 
+@pytest.fixture
+def no_env_user(monkeypatch):
+    monkeypatch.delenv("KAGGLE_USERNAME", raising=False)
+    monkeypatch.setattr(kaggle_launch, "_cli", lambda: "/nonexistent/kaggle")  # never call a real CLI
+
+
+def _write(home, rel, data):
+    path = home / rel
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(data))
+
+
+def test_username_from_oauth_credentials(tmp_path, no_env_user):
+    _write(tmp_path, ".kaggle/credentials.json", {"refresh_token": "x", "username": "oauth-user"})
+    assert kaggle_launch.kaggle_username(home=tmp_path) == "oauth-user"
+
+
+def test_username_from_legacy_kaggle_json(tmp_path, no_env_user):
+    _write(tmp_path, ".kaggle/kaggle.json", {"username": "legacy-user", "key": "x"})
+    assert kaggle_launch.kaggle_username(home=tmp_path) == "legacy-user"
+
+
+def test_username_precedence(tmp_path, no_env_user, monkeypatch):
+    _write(tmp_path, ".kaggle/credentials.json", {"username": "file-user"})
+    monkeypatch.setenv("KAGGLE_USERNAME", "env-user")
+    assert kaggle_launch.kaggle_username(home=tmp_path) == "env-user"
+    assert kaggle_launch.kaggle_username("flag-user", home=tmp_path) == "flag-user"
+
+
+def test_empty_username_falls_through_and_missing_everything_exits(tmp_path, no_env_user):
+    _write(tmp_path, ".kaggle/credentials.json", {"username": ""})
+    with pytest.raises(SystemExit, match="kaggle auth login"):
+        kaggle_launch.kaggle_username(home=tmp_path)
+
+
+def test_username_from_config_view_output():
+    text = "Configuration values from /Users/x/.kaggle\n- username: cli-user\n- auth_method: oauth\n- path: None\n"
+    assert kaggle_launch.username_from_config_view(text) == "cli-user"
+    assert kaggle_launch.username_from_config_view("- username: None\n") is None
+    assert kaggle_launch.username_from_config_view("Authentication required") is None
+
+
 def test_every_config_has_a_distinct_kernel_slug():
     slugs = {kaggle_launch.kernel_slug(p.stem) for p in (ROOT / "configs").glob("*.yaml")}
     assert len(slugs) == len(list((ROOT / "configs").glob("*.yaml")))

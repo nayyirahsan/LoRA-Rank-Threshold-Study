@@ -13,6 +13,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -23,13 +24,46 @@ REPO = "https://github.com/nayyirahsan/lora-rank-threshold.git"
 TEMPLATE = ROOT / "kaggle" / "kernel_template.py"
 
 
-def kaggle_username() -> str:
+_CONFIG_VIEW_USER = re.compile(r"^-\s*username:\s*(\S+)\s*$", re.MULTILINE)
+
+
+def _cli() -> str:
+    return shutil.which("kaggle") or str(Path(sys.executable).with_name("kaggle"))
+
+
+def username_from_config_view(text: str) -> str | None:
+    """Parse `kaggle config view` output ("- username: <name>"). Unset values print as None."""
+    match = _CONFIG_VIEW_USER.search(text)
+    return match.group(1) if match and match.group(1).lower() != "none" else None
+
+
+def kaggle_username(explicit: str | None = None, home: Path | None = None) -> str:
+    """The kernel id needs a username, but Kaggle CLI 2.x's recommended auth (OAuth login, or a bare
+    access token) doesn't hand one over directly. Sources, in order: --user, KAGGLE_USERNAME,
+    OAuth's ~/.kaggle/credentials.json, a legacy kaggle.json, then `kaggle config view`.
+    Only the username field is ever read from credential files."""
+    if explicit:
+        return explicit
     if os.environ.get("KAGGLE_USERNAME"):
         return os.environ["KAGGLE_USERNAME"]
-    for path in (Path.home() / ".kaggle" / "kaggle.json", Path.home() / ".config" / "kaggle" / "kaggle.json"):
+    home = home or Path.home()
+    for path in (home / ".kaggle" / "credentials.json", home / ".kaggle" / "kaggle.json",
+                 home / ".config" / "kaggle" / "kaggle.json"):
         if path.exists():
-            return json.loads(path.read_text())["username"]  # only the username is read
-    raise SystemExit("no Kaggle username: set KAGGLE_USERNAME or create ~/.kaggle/kaggle.json")
+            try:
+                name = json.loads(path.read_text()).get("username")
+            except (OSError, json.JSONDecodeError):
+                name = None
+            if name:
+                return name
+    try:
+        out = subprocess.run([_cli(), "config", "view"], capture_output=True, text=True, timeout=60).stdout
+        name = username_from_config_view(out)
+        if name:
+            return name
+    except (OSError, subprocess.TimeoutExpired):
+        pass
+    raise SystemExit("could not determine your Kaggle username: run `kaggle auth login`, or pass --user <name>")
 
 
 def kernel_slug(grid: str) -> str:
@@ -68,8 +102,7 @@ def render(grid: str, user: str, extra_args: list[str], out_dir: Path) -> Path:
 
 
 def kaggle(*args: str) -> int:
-    cli = shutil.which("kaggle") or str(Path(sys.executable).with_name("kaggle"))
-    return subprocess.run([cli, *args], check=False).returncode
+    return subprocess.run([_cli(), *args], check=False).returncode
 
 
 def main() -> int:
@@ -77,11 +110,12 @@ def main() -> int:
     ap.add_argument("action", choices=["push", "status", "pull"])
     ap.add_argument("grid")
     ap.add_argument("--dest", default=None, help="pull destination (default results/kaggle/<grid>)")
+    ap.add_argument("--user", default=None, help="Kaggle username, if it can't be found automatically")
     argv = sys.argv[1:]
     extra = argv[argv.index("--") + 1 :] if "--" in argv else []
     args = ap.parse_args(argv[: argv.index("--")] if "--" in argv else argv)
 
-    user = kaggle_username()
+    user = kaggle_username(args.user)
     kernel_id = f"{user}/{kernel_slug(args.grid)}"
     if args.action == "push":
         out = render(args.grid, user, extra, ROOT / "build" / "kaggle" / args.grid)
