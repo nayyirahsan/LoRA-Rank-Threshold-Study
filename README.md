@@ -72,9 +72,11 @@ python -m venv .venv && .venv/bin/pip install -e ".[dev,gpu]"
 
 ## Kaggle runbook (2×T4)
 
-**One command, unattended (batch kernel):** with a Kaggle API token in `~/.kaggle/kaggle.json`:
+**One command, unattended (batch kernel):** authenticate once, then submit. Your Kaggle account must
+be phone-verified to use GPUs and internet in kernels.
 
 ```bash
+kaggle auth login                               # OAuth in the browser; or put a token in ~/.kaggle/access_token
 python scripts/kaggle_launch.py push lr_cal     # submit: 2×T4, internet on, private kernel
 python scripts/kaggle_launch.py status lr_cal
 python scripts/kaggle_launch.py pull lr_cal     # registry, logs, tables, figures → results/kaggle/lr_cal/
