@@ -26,6 +26,32 @@ def sh(cmd: str, check: bool = True) -> int:
     return subprocess.run(cmd, shell=True, check=check).returncode
 
 
+def preflight() -> None:
+    """Fail in seconds with a diagnosis, not a clone traceback. Kaggle can accept a kernel that
+    requested internet and GPU and still run it without them: both need a phone-verified account.
+    The first submission of this kernel died on `git clone` with "Could not resolve host"."""
+    import socket
+
+    problems = []
+    try:
+        socket.create_connection(("github.com", 443), timeout=10).close()
+    except OSError as e:
+        problems.append(
+            f"no internet ({e}). The job needs it for the repo, pip, the Qwen weights, and the SQL data. "
+            "Phone-verify the Kaggle account (kaggle.com/settings), then re-push."
+        )
+    gpus = subprocess.run("nvidia-smi -L", shell=True, capture_output=True, text=True)
+    n_gpus = len([line for line in gpus.stdout.splitlines() if line.startswith("GPU ")]) if gpus.returncode == 0 else 0
+    if n_gpus == 0:
+        problems.append("no GPU attached. Phone-verify the account and make sure the kernel's accelerator is GPU T4 x2.")
+    elif n_gpus < 2:
+        print(f"preflight: warning, only {n_gpus} GPU visible; the grid will run on one shard (about twice as slow)", flush=True)
+    if problems:
+        sys.exit("preflight failed:\n- " + "\n- ".join(problems))
+    print(f"preflight: internet OK, {n_gpus} GPU(s)", flush=True)
+
+
+preflight()
 sh(f"git clone --depth 1 {REPO} {SRC}")
 os.chdir(SRC)
 sh("git log --oneline -1")
