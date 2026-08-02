@@ -78,6 +78,40 @@ def test_username_from_config_view_output():
     assert kaggle_launch.username_from_config_view("Authentication required") is None
 
 
+@pytest.mark.parametrize("text, expected", [
+    ('u/k has status "KernelWorkerStatus.RUNNING"', ("running", "RUNNING")),
+    ('u/k has status "KernelWorkerStatus.QUEUED"', ("running", "QUEUED")),
+    ('u/k has status "KernelWorkerStatus.COMPLETE"', ("terminal", "COMPLETE")),
+    ('u/k has status "KernelWorkerStatus.ERROR"', ("terminal", "ERROR")),
+    ('u/k has status "KernelWorkerStatus.CANCEL_ACKNOWLEDGED"', ("terminal", "CANCEL_ACKNOWLEDGED")),
+    # The real message that fooled the first watcher: a local DNS failure, not a kernel error.
+    ("HTTPSConnectionPool(host='api.kaggle.com', port=443): Max retries exceeded (Caused by "
+     "NameResolutionError(\"Failed to resolve 'api.kaggle.com'\"))", ("transient", None)),
+    ("Authentication required to call the Kaggle API.", ("transient", None)),
+])
+def test_classify_status(text, expected):
+    assert kaggle_launch.classify_status(text) == expected
+
+
+def test_watch_survives_transient_failures_and_reports_outcome(monkeypatch):
+    replies = iter([
+        "NameResolutionError: Failed to resolve 'api.kaggle.com'",
+        'x has status "KernelWorkerStatus.RUNNING"',
+        'x has status "KernelWorkerStatus.COMPLETE"',
+    ])
+
+    class Out:
+        def __init__(self, text):
+            self.stdout, self.stderr = text, ""
+
+    monkeypatch.setattr(kaggle_launch.subprocess, "run", lambda *a, **k: Out(next(replies)))
+    assert kaggle_launch.watch("u/k", poll_seconds=0, max_hours=1) == 0
+
+    replies = iter(['x has status "KernelWorkerStatus.ERROR"'])
+    monkeypatch.setattr(kaggle_launch.subprocess, "run", lambda *a, **k: Out(next(replies)))
+    assert kaggle_launch.watch("u/k", poll_seconds=0, max_hours=1) == 1
+
+
 def test_every_config_has_a_distinct_kernel_slug():
     slugs = {kaggle_launch.kernel_slug(p.stem) for p in (ROOT / "configs").glob("*.yaml")}
     assert len(slugs) == len(list((ROOT / "configs").glob("*.yaml")))

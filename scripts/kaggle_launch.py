@@ -2,6 +2,7 @@
 
     python scripts/kaggle_launch.py push lr_cal      # render + submit: 2xT4, internet on, private kernel
     python scripts/kaggle_launch.py status lr_cal
+    python scripts/kaggle_launch.py watch lr_cal     # block until COMPLETE/ERROR; exit 0 only on COMPLETE
     python scripts/kaggle_launch.py pull lr_cal      # -> results/kaggle/lr_cal/
     python scripts/kaggle_launch.py push grid_facts -- --push-repo <hf-user>/lorathresh-ckpts
 
@@ -105,11 +106,52 @@ def kaggle(*args: str) -> int:
     return subprocess.run([_cli(), *args], check=False).returncode
 
 
+_STATUS = re.compile(r"KernelWorkerStatus\.([A-Z_]+)")
+TERMINAL_STATES = {"COMPLETE", "ERROR", "CANCEL_REQUESTED", "CANCEL_ACKNOWLEDGED", "CANCELLED", "CANCELED"}
+
+
+def classify_status(text: str) -> tuple[str, str | None]:
+    """Classify `kaggle kernels status` output as ("terminal" | "running" | "transient", state).
+
+    Only Kaggle's own KernelWorkerStatus value counts. The first watcher used a plain
+    grep for "error", and it declared a healthy running kernel finished when *this machine* briefly
+    lost DNS: the CLI's NameResolutionError text contains "Error". Anything without a status value
+    (network failures, auth hiccups) is "transient", so the watch keeps going."""
+    match = _STATUS.search(text)
+    if not match:
+        return "transient", None
+    state = match.group(1)
+    return ("terminal" if state in TERMINAL_STATES else "running"), state
+
+
+def watch(kernel_id: str, poll_seconds: float, max_hours: float) -> int:
+    """Poll until a terminal state. Returns 0 on COMPLETE, 1 on any other terminal state or timeout."""
+    import time
+
+    start, last = time.time(), None
+    while time.time() - start < max_hours * 3600:
+        out = subprocess.run([_cli(), "kernels", "status", kernel_id], capture_output=True, text=True)
+        kind, state = classify_status(out.stdout + out.stderr)
+        minutes = (time.time() - start) / 60
+        if kind == "transient":
+            print(f"{minutes:.0f} min: status check failed (will retry): {(out.stdout + out.stderr).strip()[:120]}", flush=True)
+        elif state != last:
+            print(f"{minutes:.0f} min: {state}", flush=True)
+            last = state
+        if kind == "terminal":
+            return 0 if state == "COMPLETE" else 1
+        time.sleep(poll_seconds)
+    print(f"gave up after {max_hours} h; last state {last}", flush=True)
+    return 1
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("action", choices=["push", "status", "pull"])
+    ap.add_argument("action", choices=["push", "status", "watch", "pull"])
     ap.add_argument("grid")
     ap.add_argument("--dest", default=None, help="pull destination (default results/kaggle/<grid>)")
+    ap.add_argument("--poll-seconds", type=float, default=300.0, help="watch: seconds between status checks")
+    ap.add_argument("--max-hours", type=float, default=13.0, help="watch: give up after this long (Kaggle caps runs at 12 h)")
     ap.add_argument("--user", default=None, help="Kaggle username, if it can't be found automatically")
     argv = sys.argv[1:]
     extra = argv[argv.index("--") + 1 :] if "--" in argv else []
@@ -123,6 +165,8 @@ def main() -> int:
         return kaggle("kernels", "push", "-p", str(out))
     if args.action == "status":
         return kaggle("kernels", "status", kernel_id)
+    if args.action == "watch":
+        return watch(kernel_id, args.poll_seconds, args.max_hours)
     dest = Path(args.dest or ROOT / "results" / "kaggle" / args.grid)
     dest.mkdir(parents=True, exist_ok=True)
     return kaggle("kernels", "output", kernel_id, "-p", str(dest))
