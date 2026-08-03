@@ -68,6 +68,21 @@ def test_gradient_accumulation_matches_full_batch():
         assert torch.allclose(a, b, atol=1e-6)
 
 
+@pytest.mark.parametrize("capability, bf16_reported, expected", [
+    ((7, 5), True, torch.float16),    # T4: bf16 "supported" only via emulation -> must pick fp16
+    ((7, 0), False, torch.float16),   # V100
+    ((8, 0), True, torch.bfloat16),   # A100
+    ((8, 9), True, torch.bfloat16),   # L4
+])
+def test_amp_dtype_requires_native_bf16(monkeypatch, capability, bf16_reported, expected):
+    from lorathresh import train
+
+    monkeypatch.setattr(train.torch.cuda, "is_available", lambda: True)
+    monkeypatch.setattr(train.torch.cuda, "get_device_capability", lambda *a: capability)
+    monkeypatch.setattr(train.torch.cuda, "is_bf16_supported", lambda *a, **k: bf16_reported)
+    assert train.device_and_amp() == ("cuda", expected)
+
+
 def test_run_config_canonicalizes_irrelevant_fields():
     a = RunConfig(task="sql", n=100, method="full", rank=64, alpha=32.0, scaling="rslora")
     b = RunConfig(task="sql", n=100, method="full")

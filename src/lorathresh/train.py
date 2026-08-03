@@ -114,7 +114,11 @@ def collate(encoded, batch: list[int], pad_id: int) -> dict[str, torch.Tensor]:
 
 def device_and_amp() -> tuple[str, torch.dtype | None]:
     if torch.cuda.is_available():
-        return "cuda", torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16  # T4: float16
+        # Don't use torch.cuda.is_bf16_supported(): it returns True on a T4 because bf16 can be
+        # *emulated*. Turing (compute capability 7.5) has no native bf16 kernels, and the first
+        # Kaggle run trained full FT at ~310 tokens/s that way. Native bf16 starts at Ampere (8.x).
+        major, _ = torch.cuda.get_device_capability()
+        return "cuda", torch.bfloat16 if major >= 8 else torch.float16
     if torch.backends.mps.is_available():
         return "mps", None
     return "cpu", None
