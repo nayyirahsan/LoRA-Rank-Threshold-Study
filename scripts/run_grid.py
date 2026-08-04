@@ -16,8 +16,10 @@ first because gap closure and the oracle both depend on them.
 from __future__ import annotations
 
 import argparse
+import gc
 import itertools
 import sys
+import traceback
 from dataclasses import asdict
 
 import yaml
@@ -77,6 +79,8 @@ def main() -> None:
     ap.add_argument("--sql-path", default=None)
     ap.add_argument("--push-repo", default=None)
     ap.add_argument("--micro-batch-size", type=int, default=None, help="split batches to fit memory (e.g. 8 for full FT on T4)")
+    ap.add_argument("--max-consecutive-failures", type=int, default=3,
+                    help="abort the shard after this many failed configs in a row (a systematic error)")
     args = ap.parse_args()
 
     with open(args.grid) as f:
@@ -93,10 +97,41 @@ def main() -> None:
     if args.dry_run:
         for c in todo:
             print(f"  {run_id(asdict(c))}  {c.task:5} n={c.n:<6} {c.method:5} r={c.rank:<4} {c.scaling:8} lr={c.lr:.0e} seed={c.seed}")
-        return
+        return 0
+    # One failing config must not take the rest of the shard with it. In the first lr_cal run,
+    # a LoRA import error ended a shard that still had queued runs. Repeated failures in a row
+    # usually mean a systematic error, so stop rather than burn GPU time on a doomed queue.
+    failed, consecutive = [], 0
     for n_done, cfg in enumerate(todo, 1):
+        rid = run_id(asdict(cfg))
         print(f"\n=== [{n_done}/{len(todo)}] {asdict(cfg)}", flush=True)
-        run(cfg, args.registry, args.output_dir, args.sql_path, args.push_repo, micro_batch_size=args.micro_batch_size)
+        try:
+            run(cfg, args.registry, args.output_dir, args.sql_path, args.push_repo, micro_batch_size=args.micro_batch_size)
+            consecutive = 0
+        except Exception:
+            traceback.print_exc()
+            failed.append(rid)
+            consecutive += 1
+            print(f"!!! run {rid} failed ({consecutive} in a row)", flush=True)
+            _free_gpu_memory()
+            if consecutive >= args.max_consecutive_failures:
+                print(f"!!! {consecutive} consecutive failures: aborting shard", flush=True)
+                break
+    if failed:
+        print(f"{len(failed)} run(s) failed: {failed}", flush=True)
+        return 1
+    return 0
+
+
+def _free_gpu_memory() -> None:
+    gc.collect()
+    try:
+        import torch
+
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+    except ImportError:
+        pass
 
 
 if __name__ == "__main__":

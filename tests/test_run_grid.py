@@ -43,6 +43,38 @@ def test_every_shipped_config_expands():
     assert counts["smoke.yaml"] == 4
 
 
+def _main(monkeypatch, tmp_path, fail_when, *extra):
+    ran = []
+
+    def fake_run(cfg, *args, **kwargs):
+        ran.append(cfg.method)
+        if fail_when(cfg):
+            raise RuntimeError(f"boom: {cfg.method}")
+
+    monkeypatch.setattr(run_grid, "run", fake_run)
+    monkeypatch.setattr(run_grid.sys, "argv", ["run_grid.py", str(ROOT / "configs" / "smoke.yaml"),
+                                               "--registry", str(tmp_path / "runs.jsonl"), *extra])
+    return run_grid.main(), ran
+
+
+def test_failed_config_does_not_stop_the_shard(monkeypatch, tmp_path):
+    # smoke.yaml order: base, full, lora r=4, lora r=16. Full FT fails; LoRA runs must still happen.
+    code, ran = _main(monkeypatch, tmp_path, lambda c: c.method == "full")
+    assert ran == ["base", "full", "lora", "lora"]
+    assert code == 1
+
+
+def test_consecutive_failures_abort_the_shard(monkeypatch, tmp_path):
+    code, ran = _main(monkeypatch, tmp_path, lambda c: c.method != "base", "--max-consecutive-failures", "2")
+    assert ran == ["base", "full", "lora"]  # full and lora r=4 fail in a row -> abort before lora r=16
+    assert code == 1
+
+
+def test_clean_grid_exits_zero(monkeypatch, tmp_path):
+    code, ran = _main(monkeypatch, tmp_path, lambda c: False)
+    assert code == 0 and len(ran) == 4
+
+
 def test_shards_partition_the_grid():
     configs = _load("grid_sql.yaml")
     shards = [configs[i::2] for i in range(2)]
