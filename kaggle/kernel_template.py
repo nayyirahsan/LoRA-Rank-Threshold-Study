@@ -56,6 +56,10 @@ sh(f"git clone --depth 1 {REPO} {SRC}")
 os.chdir(SRC)
 sh("git log --oneline -1")
 sh("pip install -q -e '.[gpu]'")
+# Kaggle's image ships torchao 0.10. peft 0.20 raises ImportError on *every* LoRA injection when an older torchao
+# is importable. In the first full lr_cal run, both shards died on their first LoRA config, one of them
+# after 94 min of full-FT runs. Nothing in this project uses torchao.
+sh("pip uninstall -y -q torchao", check=False)
 sh("nvidia-smi --query-gpu=index,name,memory.total --format=csv")
 
 gate = (
@@ -68,9 +72,21 @@ if sh(f"CUDA_VISIBLE_DEVICES=0 {gate}", check=False) != 0:
     if sh(f"CUDA_VISIBLE_DEVICES=0 {gate} --micro-batch-size 8", check=False) != 0:
         sys.exit("gate: full FT fails even with micro-batching; see the log above")
     micro = ["--micro-batch-size", "8"]
+# Also gate the LoRA code path. The full-FT gate alone missed the torchao/peft incompatibility,
+# which only fails when an adapter is injected.
+lora_gate = gate.replace("--method full --lr 3e-5", "--method lora --rank 64 --lr 3e-4")
+if sh(f"CUDA_VISIBLE_DEVICES=0 {lora_gate} {' '.join(micro)}", check=False) != 0:
+    sys.exit("gate: LoRA r=64 failed; see the log above")
 shutil.rmtree("/tmp/gate_ckpt", ignore_errors=True)
 (WORK / "results").mkdir(parents=True, exist_ok=True)
 shutil.copy("/tmp/gate.jsonl", WORK / "results" / "gate.jsonl")
+
+# Resume: a registry committed to the repo from an earlier kernel run marks those configs done,
+# so a re-submission doesn't repeat hours of finished GPU work.
+seed = SRC / "results" / "kaggle" / GRID / "results" / "runs.jsonl"
+if seed.exists():
+    shutil.copy(seed, WORK / "results" / "runs.jsonl")
+    print(f"resuming: {sum(1 for line in open(seed) if line.strip())} finished runs from {seed.relative_to(SRC)}", flush=True)
 print(json.dumps({"grid": GRID, "micro_batch": micro, "extra_args": EXTRA_ARGS}), flush=True)
 
 code = subprocess.run([
