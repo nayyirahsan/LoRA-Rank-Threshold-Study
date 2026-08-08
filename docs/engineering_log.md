@@ -198,6 +198,44 @@ questions move to the Kaggle `lr_cal` run. When reading its results, check first
 held-out accuracy at facts N=1000 clearly beats base (G is undefined below a 0.02 gain). If it
 doesn't, raise `epochs` in `grid_facts.yaml` before launching the main grid.
 
+## 13. First real GPU run (Kaggle lr_cal): three failures, one useful result
+The account had to be phone-verified first. Before that, Kaggle recorded `enable_internet: true`
+and still ran the kernel offline (`Could not resolve host: github.com`), which led to a preflight
+check. The next submission passed preflight (2× T4, 15GB each). Then:
+
+**a. The full-FT memory gate worked.** Full FT at batch 32 ran out of memory on SQL. The fallback
+to `--micro-batch-size 8` passed at **12.28GB peak**.
+
+**b. Every LoRA config crashed.** `ImportError: Found an incompatible version of torchao. Found
+version 0.10.0, but only versions above 0.16.0 are supported`. Kaggle's image ships an old
+torchao, and peft 0.20 raises on *any* adapter injection when it finds one. Shard 1 died on its
+first config; shard 0 finished three full-FT runs, then died on its first LoRA config after
+**94 min**.
+**Why it wasn't caught earlier:** the gate only exercised full FT, and `run_grid.py` let one
+exception kill a whole shard.
+**Fixes:**
+- uninstall torchao in the kernel (nothing here uses it)
+- gate the LoRA path (r=64) too
+- `run_grid.py` logs a failed config and continues, aborting only after 3 failures in a row
+
+**c. Emulated bf16 made training ~3× slower than it should be.** All three full-FT runs recorded
+`amp: torch.bfloat16` at **~310 tokens/s** (46 min each for 856k tokens).
+`torch.cuda.is_bf16_supported()` returns True on a T4 because bf16 can be *emulated*, but Turing
+(compute capability 7.5) has no native bf16 kernels. The fp16 path with GradScaler was never used.
+**Fix:** pick bf16 only when compute capability ≥ 8 (Ampere and newer).
+**Consequence:** the three finished runs are **not reused**. The design keeps autocast precision
+the same across full FT and LoRA, and precision isn't part of the run id, so resuming them next
+to fp16 LoRA runs would add a hidden confound. They're archived under
+`results/kaggle/archive/lr_cal_v2_emulated_bf16/` (outside the path the kernel resumes from) and
+rerun in fp16.
+
+**d. The one scientific result so far: 10 epochs saturates N=1000 facts.** Full FT reached
+**100% held-out-template accuracy** at lr 1e-5 and 3e-5 (72.6% at 1e-4), with final training loss
+0.0. This clears the go/no-go check from entry #12: 10 epochs is enough, and very likely more than
+enough. **Budget implication:** once fp16 throughput is measured, fewer epochs is the first place
+to cut, since the facts grid at N=16k is ~13.7M tokens per full-FT run. Changing epochs changes the
+experiment, so it gets decided explicitly with the lr_cal results, not tuned quietly.
+
 `notebooks/kaggle_runner.ipynb` puts this together: setup, a throughput and peak-memory gate on the
 two most memory-hungry configs (full FT and LoRA r=64 on SQL), two-shard launch, a progress check,
 an oracle sweep over every full-FT run, and aggregation.
