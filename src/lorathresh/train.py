@@ -178,6 +178,19 @@ def build_model(cfg: RunConfig, device: str, amp_dtype: torch.dtype | None):
 
 # ---------------------------------------------------------------- loop
 
+def micro_size(rows: int, width: int, micro_batch_size: int | None, max_micro_tokens: int | None) -> int:
+    """Rows per micro-batch for one padded batch of shape (rows, width).
+
+    A token cap adapts to sequence length. A fixed row count can't: in lr_cal, micro-batch 8 was
+    sized for SQL rows of up to ~190 tokens but applied to every run, so 22-token facts batches that
+    fit whole were split 4 times per step. Facts LoRA then ran at ~370 tokens/s against ~1180 for SQL LoRA.
+    """
+    size = micro_batch_size or rows
+    if max_micro_tokens:
+        size = min(size, max(1, max_micro_tokens // max(1, width)))
+    return max(1, min(size, rows))
+
+
 def accumulate_backward(model, inputs: dict[str, torch.Tensor], micro_batch_size: int, device: str, amp_dtype, scaler) -> float:
     """Backward over one optimizer batch in micro-batches. Returns the batch's mean token loss.
 
@@ -206,6 +219,7 @@ def accumulate_backward(model, inputs: dict[str, torch.Tensor], micro_batch_size
 def train_loop(
     model, tokenizer, pairs, cfg: RunConfig, device: str, amp_dtype, log_every: int = 50,
     micro_batch_size: int | None = None,
+    max_micro_tokens: int | None = None,
 ) -> dict:
     encoded = [encode(tokenizer, p, a, cfg.max_len) for p, a in pairs]
     lengths = [len(x) for x, _ in encoded]
@@ -225,7 +239,9 @@ def train_loop(
             if step >= total_steps:
                 break
             inputs = collate(encoded, batch, tokenizer.pad_token_id)
-            loss = accumulate_backward(model, inputs, micro_batch_size or cfg.batch_size, device, amp_dtype, scaler)
+            rows, width = inputs["input_ids"].shape
+            micro = micro_size(rows, width, micro_batch_size, max_micro_tokens)
+            loss = accumulate_backward(model, inputs, micro, device, amp_dtype, scaler)
             scaler.unscale_(opt)
             torch.nn.utils.clip_grad_norm_(params, 1.0)
             scaler.step(opt)
@@ -267,6 +283,7 @@ def run(
     push_repo: str | None = None,
     force: bool = False,
     micro_batch_size: int | None = None,  # memory only; math is identical, so it isn't part of the run id
+    max_micro_tokens: int | None = None,  # same, but adapts the split to sequence length
 ) -> dict | None:
     registry = Registry(registry_path)
     key = asdict(cfg)
@@ -283,8 +300,12 @@ def run(
 
     metrics: dict = {"n_train_examples": len(pairs), "device": device, "amp": str(amp_dtype)}
     if cfg.method != "base":
-        metrics |= train_loop(model, tokenizer, pairs, cfg, device, amp_dtype, micro_batch_size=micro_batch_size)
+        metrics |= train_loop(
+            model, tokenizer, pairs, cfg, device, amp_dtype,
+            micro_batch_size=micro_batch_size, max_micro_tokens=max_micro_tokens,
+        )
         metrics["micro_batch_size"] = micro_batch_size or cfg.batch_size
+        metrics["max_micro_tokens"] = max_micro_tokens
         rid = run_id(key)
         # Full-FT checkpoints feed the oracle. For LoRA, peft saves only the adapter.
         out = Path(output_dir) / rid
@@ -321,8 +342,11 @@ def main() -> None:
     ap.add_argument("--push-repo", default=None)
     ap.add_argument("--force", action="store_true")
     ap.add_argument("--micro-batch-size", type=int, default=None, help="split each batch to save memory; same math")
+    ap.add_argument("--max-micro-tokens", type=int, default=None,
+                    help="cap padded tokens per micro-batch; short batches stay whole, long ones split")
     args = vars(ap.parse_args())
-    extra = {k: args.pop(k) for k in ("registry", "output_dir", "sql_path", "push_repo", "force", "micro_batch_size")}
+    extra = {k: args.pop(k) for k in ("registry", "output_dir", "sql_path", "push_repo", "force",
+                                      "micro_batch_size", "max_micro_tokens")}
     run(
         RunConfig(**args),
         registry_path=extra["registry"],
@@ -331,6 +355,7 @@ def main() -> None:
         push_repo=extra["push_repo"],
         force=extra["force"],
         micro_batch_size=extra["micro_batch_size"],
+        max_micro_tokens=extra["max_micro_tokens"],
     )
 
 

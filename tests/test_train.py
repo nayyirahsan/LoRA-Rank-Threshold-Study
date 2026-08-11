@@ -10,6 +10,7 @@ pytest.importorskip("peft")
 from lorathresh.train import (  # noqa: E402
     RunConfig,
     accumulate_backward,
+    micro_size,
     collate,
     expected_lora_params,
     length_grouped_batches,
@@ -81,6 +82,19 @@ def test_amp_dtype_requires_native_bf16(monkeypatch, capability, bf16_reported, 
     monkeypatch.setattr(train.torch.cuda, "get_device_capability", lambda *a: capability)
     monkeypatch.setattr(train.torch.cuda, "is_bf16_supported", lambda *a, **k: bf16_reported)
     assert train.device_and_amp() == ("cuda", expected)
+
+
+@pytest.mark.parametrize("rows, width, micro, max_tokens, expected", [
+    (32, 27, None, None, 32),     # no cap: whole batch
+    (32, 27, None, 1024, 32),     # facts: 1024 // 27 = 37 >= 32 rows -> stays whole (fixed micro=8 split it 4x)
+    (32, 189, None, 1024, 5),     # longest SQL batch: 1024 // 189 = 5 rows
+    (32, 100, None, 1024, 10),
+    (32, 27, 8, 1024, 8),         # an explicit row cap still applies
+    (32, 5000, None, 1024, 1),    # a single over-long row still trains (one row per micro-batch)
+    (3, 10, None, 1024, 3),       # never more rows than the batch has
+])
+def test_micro_size(rows, width, micro, max_tokens, expected):
+    assert micro_size(rows, width, micro, max_tokens) == expected
 
 
 def test_run_config_canonicalizes_irrelevant_fields():

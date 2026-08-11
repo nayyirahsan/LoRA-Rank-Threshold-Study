@@ -79,6 +79,8 @@ def main() -> None:
     ap.add_argument("--sql-path", default=None)
     ap.add_argument("--push-repo", default=None)
     ap.add_argument("--micro-batch-size", type=int, default=None, help="split batches to fit memory (e.g. 8 for full FT on T4)")
+    ap.add_argument("--max-micro-tokens", type=int, default=None,
+                    help="cap padded tokens per micro-batch (preferred over --micro-batch-size: adapts to sequence length)")
     ap.add_argument("--max-consecutive-failures", type=int, default=3,
                     help="abort the shard after this many failed configs in a row (a systematic error)")
     args = ap.parse_args()
@@ -106,7 +108,8 @@ def main() -> None:
         rid = run_id(asdict(cfg))
         print(f"\n=== [{n_done}/{len(todo)}] {asdict(cfg)}", flush=True)
         try:
-            run(cfg, args.registry, args.output_dir, args.sql_path, args.push_repo, micro_batch_size=args.micro_batch_size)
+            run(cfg, args.registry, args.output_dir, args.sql_path, args.push_repo,
+                micro_batch_size=args.micro_batch_size, max_micro_tokens=args.max_micro_tokens)
             consecutive = 0
         except Exception:
             traceback.print_exc()
