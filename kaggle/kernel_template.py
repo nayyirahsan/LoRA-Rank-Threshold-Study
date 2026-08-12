@@ -68,10 +68,13 @@ gate = (
 )
 micro: list[str] = []
 if sh(f"CUDA_VISIBLE_DEVICES=0 {gate}", check=False) != 0:
-    print("gate: full FT failed at full batch size; retrying with --micro-batch-size 8", flush=True)
-    if sh(f"CUDA_VISIBLE_DEVICES=0 {gate} --micro-batch-size 8", check=False) != 0:
+    # Cap tokens, not rows, per micro-batch. lr_cal's fixed 8 rows (12.28GB peak on SQL) also split
+    # 22-token facts batches that fit whole, slowing every facts run. 1024 tokens is below the ~1200
+    # that 8 SQL rows needed; facts batches (32 x ~27 tokens) stay whole.
+    print("gate: full FT failed at full batch size; retrying with --max-micro-tokens 1024", flush=True)
+    if sh(f"CUDA_VISIBLE_DEVICES=0 {gate} --max-micro-tokens 1024", check=False) != 0:
         sys.exit("gate: full FT fails even with micro-batching; see the log above")
-    micro = ["--micro-batch-size", "8"]
+    micro = ["--max-micro-tokens", "1024"]
 # Also gate the LoRA code path. The full-FT gate alone missed the torchao/peft incompatibility,
 # which only fails when an adapter is injected.
 lora_gate = gate.replace("--method full --lr 3e-5", "--method lora --rank 64 --lr 3e-4")
