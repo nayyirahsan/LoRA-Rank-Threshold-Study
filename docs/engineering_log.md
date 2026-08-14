@@ -236,6 +236,40 @@ enough. **Budget implication:** once fp16 throughput is measured, fewer epochs i
 to cut, since the facts grid at N=16k is ~13.7M tokens per full-FT run. Changing epochs changes the
 experiment, so it gets decided explicitly with the lr_cal results, not tuned quietly.
 
+## 14. lr_cal completed: results, throughput, and what they don't settle
+Kaggle kernel v3, 2×T4, fp16. 18/18 runs finished with no failures (318 min wall clock, including
+install and gates). During the run the status API returned `Permission 'kernels.get' was denied`
+and connection errors for ~70 min. `watch` treated them as transient, as designed, and still
+caught the real `COMPLETE`.
+
+| Setting (1 seed) | Full FT lr 1e-5 / 3e-5 / 1e-4 | LoRA r=4 lr 1e-4 / 3e-4 / 1e-3 | LoRA r=64 lr 1e-4 / 3e-4 / 1e-3 |
+|---|---|---|---|
+| Facts N=1000, 10 ep (held-out acc, n=1000) | 1.000 / 0.998 / 1.000 | 0.892 / **1.000** / 0.998 | 0.902 / 0.996 / **1.000** |
+| SQL n=2000, 2 ep (exec match, n=500, SE ≈ 1.6pp) | **0.852** / 0.834 / 0.786 | 0.770 / 0.850 / **0.862** | 0.720 / 0.846 / **0.854** |
+
+**Throughput (tokens/s):** SQL full FT 1264 (**4.1×** the emulated-bf16 run), SQL LoRA ~1175. But
+facts full FT was only ~485 and facts LoRA ~370. Every run inherited the gate's fixed
+`--micro-batch-size 8`, sized for SQL rows of up to ~190 tokens. It split 22-token facts batches
+that fit whole (facts LoRA peaked at 1.6GB) into 4 forward/backward passes per step.
+**Fix:** `--max-micro-tokens` caps padded tokens per micro-batch, so facts batches stay whole and long
+SQL batches still split. The gradients are identical; the kernel's fallback now uses a 1024-token cap.
+
+**What lr_cal does and doesn't settle:**
+- **Facts N=1000 is saturated.** Every full-FT LR and every LoRA LR ≥ 3e-4 reaches ~100%, so this
+  setting can't rank LRs for N=4k/16k, where capacity is supposed to bind.
+- **Several optima sit on the edge of the grid.** SQL full FT is best at its *lowest* LR (1e-5), and
+  SQL LoRA at its *highest* (1e-3), at both ranks. The true optimum may lie outside the tested range,
+  and the top-two gaps (0.8–1.2pp) are within one standard error.
+- **The best LR did not visibly shift between r=4 and r=64** under α/r, even though α/r differs 16×
+  between them. One seed and edge-of-range optima make this weak evidence; it is not a finding yet.
+- **Early H1 signal (1 seed):** on SQL, LoRA r=4 (0.862) already matches full FT (0.852), consistent
+  with the prediction that r* ≤ 8 for the skill/format task.
+
+**Budget:** GPU time used so far is ≥ 7 session-hours (v2 ~1.6h, v3 5.3h). At the measured facts
+full-FT rate, one N=16k run (~13.7M tokens) would take ~7.8h, *before* the micro-batching fix. The
+facts grid can't be sized until post-fix facts throughput is measured. Epochs are the obvious lever:
+10 epochs gives 100% at N=1000.
+
 `notebooks/kaggle_runner.ipynb` puts this together: setup, a throughput and peak-memory gate on the
 two most memory-hungry configs (full FT and LoRA r=64 on SQL), two-shard launch, a progress check,
 an oracle sweep over every full-FT run, and aggregation.
