@@ -40,7 +40,7 @@ def test_grid_facts_counts_and_ordering():
 def test_every_shipped_config_expands():
     counts = {p.name: len(_load(p.name)) for p in (ROOT / "configs").glob("*.yaml")}
     assert counts["lr_cal.yaml"] == 18 and counts["grid_sql.yaml"] == 28 and counts["ablations.yaml"] == 9
-    assert counts["smoke.yaml"] == 4
+    assert counts["smoke.yaml"] == 4 and counts["lr_cal_ext.yaml"] == 9
 
 
 def _main(monkeypatch, tmp_path, fail_when, *extra):

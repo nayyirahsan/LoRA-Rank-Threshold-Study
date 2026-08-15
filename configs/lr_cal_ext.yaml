@@ -1,0 +1,36 @@
+# Follow-up to lr_cal (see docs/engineering_log.md #14). 9 runs, ~2 GPU-hours on 2xT4.
+#  1. Edge-of-range LRs: SQL full FT was best at its lowest LR (1e-5) and SQL LoRA at its highest
+#     (1e-3), so test one step past each edge in the same setting as lr_cal (n=2000, 2 epochs, n_eval=500).
+#  2. Facts N=4000: N=1000 saturated (~100% for nearly everything), so it can't rank LRs where capacity
+#     should bind. These runs also measure facts throughput with token-capped micro-batching, which
+#     sizes the facts grid. Same settings as grid_facts (10 epochs, n_eval=1000), so the runs can be
+#     reused by the main grid if its LRs match.
+#  3. Base runs give every setting a gap-closure baseline. The N=1000 and SQL base runs use n_eval=500
+#     so they pair with the lr_cal rows (the analysis only compares runs with the same eval size).
+defaults:
+  model: Qwen/Qwen3-0.6B-Base
+  batch_size: 32
+  seed: 0
+
+blocks:
+  - task: facts
+    n: 1000
+    epochs: 10
+    n_eval: 500
+    method: [base]
+
+  - task: facts
+    n: 4000
+    epochs: 10
+    n_eval: 1000
+    method: [base, full, lora]
+    rank: [4, 64]
+    lr: {full: 1.0e-5, lora: {4: 3.0e-4, 64: 1.0e-3}}   # best (or tied-best) in lr_cal at N=1000
+
+  - task: sql
+    n: 2000
+    epochs: 2
+    n_eval: 500
+    method: [base, full, lora]
+    rank: [4, 64]
+    lr: {full: 3.0e-6, lora: 3.0e-3}                   # one step past each edge of lr_cal's range
