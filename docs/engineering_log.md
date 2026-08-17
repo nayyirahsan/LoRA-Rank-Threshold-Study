@@ -244,7 +244,7 @@ caught the real `COMPLETE`.
 
 | Setting (1 seed) | Full FT lr 1e-5 / 3e-5 / 1e-4 | LoRA r=4 lr 1e-4 / 3e-4 / 1e-3 | LoRA r=64 lr 1e-4 / 3e-4 / 1e-3 |
 |---|---|---|---|
-| Facts N=1000, 10 ep (held-out acc, n=1000) | 1.000 / 0.998 / 1.000 | 0.892 / **1.000** / 0.998 | 0.902 / 0.996 / **1.000** |
+| Facts N=1000, 10 ep (held-out acc, n=500) | 1.000 / 0.998 / 1.000 | 0.892 / **1.000** / 0.998 | 0.902 / 0.996 / **1.000** |
 | SQL n=2000, 2 ep (exec match, n=500, SE ≈ 1.6pp) | **0.852** / 0.834 / 0.786 | 0.770 / 0.850 / **0.862** | 0.720 / 0.846 / **0.854** |
 
 **Throughput (tokens/s):** SQL full FT 1264 (**4.1×** the emulated-bf16 run), SQL LoRA ~1175. But
