@@ -168,7 +168,10 @@ def build_model(cfg: RunConfig, device: str, amp_dtype: torch.dtype | None):
     model = AutoModelForCausalLM.from_pretrained(cfg.model, dtype=dtype).to(device)
     if cfg.method == "base":
         return model, tokenizer
-    if device == "cuda":
+    # Checkpointing trades ~30% extra compute for activation memory. Only full FT needs that on a T4
+    # (12.3GB peak on SQL). LoRA peaked at 1.6-4.7GB with checkpointing on in lr_cal, so it gets turned
+    # off there. Recomputing activations doesn't change the math, so run ids and results stay comparable.
+    if device == "cuda" and cfg.method == "full":
         model.gradient_checkpointing_enable()
         model.enable_input_require_grads()
     if cfg.method == "lora":
