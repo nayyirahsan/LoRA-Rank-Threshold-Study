@@ -17,6 +17,7 @@ from pathlib import Path
 REPO = "__REPO__"
 GRID = "__GRID__"
 EXTRA_ARGS = __EXTRA_ARGS__
+RUN_ORACLE = GRID.startswith("grid_")  # main grids: sweep oracle ranks for each full-FT checkpoint
 WORK = Path("/kaggle/working")
 SRC = Path("/tmp/repo")
 
@@ -97,6 +98,47 @@ code = subprocess.run([
     "--output-dir", "/tmp/ckpt", "--log-dir", str(WORK / "logs"),
     "--registry", str(WORK / "results" / "runs.jsonl"), *micro, *EXTRA_ARGS,
 ]).returncode
+
+
+def oracle_phase() -> int:
+    """SVD oracle sweep for every full-FT run this kernel trained, while its checkpoint is still in /tmp.
+
+    Doing this in the same session avoids moving 2.4GB checkpoints through the Hub, so grids need no HF
+    token. Full-FT runs are split across the GPUs, one sequential worker per GPU.
+    """
+    registry = WORK / "results" / "runs.jsonl"
+    if not registry.exists():
+        return 0
+    rows = [json.loads(line) for line in registry.read_text().splitlines() if line.strip()]
+    ft_ids = sorted({
+        r["run_id"] for r in rows
+        if r["config"].get("method") == "full" and r["config"].get("max_steps") is None
+        and Path(r["metrics"].get("checkpoint", "")).exists()
+    })
+    if not ft_ids:
+        print("oracle: no full-FT checkpoints in this session", flush=True)
+        return 0
+    n_gpus = max(1, len([l for l in subprocess.run("nvidia-smi -L", shell=True, capture_output=True, text=True).stdout.splitlines() if l.startswith("GPU ")]))
+    print(f"oracle: {len(ft_ids)} full-FT runs across {n_gpus} GPU(s)", flush=True)
+    workers = []
+    for gpu in range(n_gpus):
+        ids = ft_ids[gpu::n_gpus]
+        if not ids:
+            continue
+        log = open(WORK / "logs" / f"oracle_gpu{gpu}.log", "w")
+        script = " && ".join(
+            f"python scripts/run_oracle.py --ft-run-id {rid} --registry {registry} --svd-device cuda "
+            f"--ranks 0,1,2,4,8,16,32,64,128,256,1024" for rid in ids
+        )
+        env = {**os.environ, "CUDA_VISIBLE_DEVICES": str(gpu), "PYTHONUNBUFFERED": "1"}
+        workers.append(subprocess.Popen(script, shell=True, env=env, stdout=log, stderr=subprocess.STDOUT))
+    return max(w.wait() for w in workers)
+
+
+if RUN_ORACLE:
+    oracle_code = oracle_phase()
+    print(f"oracle phase exit code: {oracle_code}", flush=True)
+    code = code or oracle_code
 sh(
     f"python scripts/aggregate.py --registry {WORK}/results/runs.jsonl --out {WORK}/results --figures {WORK}/figures",
     check=False,
