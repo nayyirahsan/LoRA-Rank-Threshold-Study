@@ -61,7 +61,8 @@ def main() -> int:
         if running:
             print(f"{(time.time() - start) / 60:.1f} min: shards still running {[s['i'] for s in running]}", flush=True)
     if failed:
-        print(f"FAILED shards: {failed}", flush=True)
+        # Sorted: shards finish in nondeterministic order (the torchao crash printed [1, 0]).
+        print(f"FAILED shards: {sorted(failed)}", flush=True)
     return 1 if failed else 0
 
 
