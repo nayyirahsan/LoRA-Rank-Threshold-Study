@@ -1,0 +1,52 @@
+# Scoped main grid: one Kaggle kernel covering both tasks (docs/engineering_log.md #15).
+# The original grid_sql + grid_facts cost ~169 GPU-hours at lr_cal throughput (facts N=16k full FT
+# alone ~10 h per run), far over the free-tier budget. This keeps the study's structure at a cost
+# that fits one overnight session.
+#
+# SQL (H1 skill side): n=2000, the lr_cal setting, 3 seeds. LRs are lr_cal's picks, confirmed as
+#   interior optima by lr_cal_ext: full FT 1e-5 beat 3e-6 (0.852 vs 0.828), LoRA 1e-3 beat 3e-3
+#   at both r=4 and r=64.
+# Facts (H1 knowledge side): N in {250, 1000, 4000}, a 16x spread like the original 1k->16k.
+#   1 seed. N=4000 is still saturated at r=4 (LoRA 1.000, full FT 0.999), so the threshold should
+#   sit below r=4 at these sizes: ranks 2 and 8 are added around it. LoRA uses 3e-4 at every rank:
+#   1e-3 dropped r=64 to 0.907 at N=4000, while 3e-4 gave 0.996-1.000 at r=4/r=64.
+# Eval sizes match lr_cal (N=1000, SQL: 500) and lr_cal_ext (N=4000: 1000), so identical configs are
+# reused. Only exact matches are reused, never calibration rows at other LRs.
+defaults:
+  model: Qwen/Qwen3-0.6B-Base
+  batch_size: 32
+  seed: 0
+
+blocks:
+  - task: sql
+    n: 2000
+    epochs: 2
+    n_eval: 500
+    method: [base, full, lora]
+    rank: [1, 2, 4, 8, 16, 32, 64, 128]
+    seed: [0, 1, 2]
+    lr: {full: 1.0e-5, lora: 1.0e-3}
+
+  - task: facts
+    n: 250
+    epochs: 10
+    n_eval: 250
+    method: [base, full, lora]
+    rank: [1, 2, 4, 8, 16, 64, 256]
+    lr: {full: 1.0e-5, lora: 3.0e-4}
+
+  - task: facts
+    n: 1000
+    epochs: 10
+    n_eval: 500
+    method: [base, full, lora]
+    rank: [1, 2, 4, 8, 16, 64, 256]
+    lr: {full: 1.0e-5, lora: 3.0e-4}
+
+  - task: facts
+    n: 4000
+    epochs: 10
+    n_eval: 1000
+    method: [base, full, lora]
+    rank: [1, 2, 4, 8, 16, 64, 256]
+    lr: {full: 1.0e-5, lora: 3.0e-4}

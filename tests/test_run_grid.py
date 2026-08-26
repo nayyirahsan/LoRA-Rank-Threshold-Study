@@ -41,6 +41,8 @@ def test_every_shipped_config_expands():
     counts = {p.name: len(_load(p.name)) for p in (ROOT / "configs").glob("*.yaml")}
     assert counts["lr_cal.yaml"] == 18 and counts["grid_sql.yaml"] == 28 and counts["ablations.yaml"] == 9
     assert counts["smoke.yaml"] == 4 and counts["lr_cal_ext.yaml"] == 9
+    # SQL: base + 3 full + 8 ranks x 3 seeds = 28; facts per N: base + full + 7 ranks = 9, x 3 values of N = 27
+    assert counts["grid_final.yaml"] == 55
 
 
 def _main(monkeypatch, tmp_path, fail_when, *extra):
