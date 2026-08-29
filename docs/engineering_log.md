@@ -270,6 +270,47 @@ full-FT rate, one N=16k run (~13.7M tokens) would take ~7.8h, *before* the micro
 facts grid can't be sized until post-fix facts throughput is measured. Epochs are the obvious lever:
 10 epochs gives 100% at N=1000.
 
+## 15. lr_cal_ext settles the calibration, and the grid is scoped to fit
+Kaggle kernel, 2×T4, 9/9 runs, 104 min, no failures.
+
+| Question | Result (1 seed) |
+|---|---|
+| SQL full FT past the low edge | 3e-6 → 0.828 exec match, below 1e-5 (0.852): **1e-5 is an interior optimum** |
+| SQL LoRA past the high edge | 3e-3 → 0.798 (r=4), 0.800 (r=64), below 1e-3 (0.862, 0.854): **1e-3 is an interior optimum** |
+| Facts N=4000, 10 epochs | full FT 1e-5 → 0.999; LoRA r=4 3e-4 → **1.000**; LoRA r=64 1e-3 → **0.907** |
+| Base models | facts 0.0 (N=1000 and 4000); SQL exec 0.318, exact 0.042 |
+
+**Throughput with the token cap (tokens/s):** facts full FT 485 → **1069** (2.2×), facts LoRA 370 →
+**~1575** (4.2×), SQL LoRA 1175 → **~1634** (+39%). These LoRA runs were submitted before gradient
+checkpointing was turned off for LoRA, so the final grid should run faster still.
+
+**What this means:**
+- **N=4000 is still saturated at r=4.** Capacity doesn't bind at rank ≥ 4 for up to 4000 facts at 10
+  epochs, so if the facts threshold exists at these sizes, it's below r=4. The final grid adds r=2 and
+  r=8 around it.
+- **1e-3 is too high for high-rank LoRA on facts at N=4000** (r=64: 0.907), while 3e-4 held at
+  0.996–1.000 across r=4/64 and N=1000/4000. Facts LoRA uses 3e-4 at every rank.
+
+**The scoped grid (`configs/grid_final.yaml`, 55 runs, one kernel):**
+- **SQL:** n=2000, ranks 1–128 plus full FT and base, 3 seeds.
+- **Facts:** N ∈ {250, 1000, 4000}, ranks {1, 2, 4, 8, 16, 64, 256} plus full FT and base, 1 seed.
+- **Oracle sweep:** runs in the same kernel for every full-FT run.
+
+**Estimated cost:** ~9.5 GPU-hours, about 5 hours of wall clock. The original grids would cost about
+169 GPU-hours at lr_cal speeds, or roughly 60 at the new speeds, still well over the free tier.
+
+**Dropped from this pass:** facts N=16k, facts seeds 2–3, the rsLoRA and QLoRA ablations, and the 1.7B
+check. The facts results are 1 seed, so the facts r* has no confidence interval.
+
+**Reuse without selection bias:** the calibration registries hold several LRs for the same (setting,
+rank). The analysis picks the best-scoring LR per rank group, so seeding the final registry with
+every calibration row would give *only some* ranks a best-of-3 advantage. Only rows whose config
+exactly matches a `grid_final` config are copied into its resume registry. That gave 11 matches.
+**The 3 full-FT matches were then dropped as well** (facts N=1000, facts N=4000, SQL seed 0). The
+in-kernel oracle sweep needs each full-FT checkpoint on the session's local disk, and a reused row has
+none, so facts N=1000 and N=4000 (1 seed) would have silently gotten no oracle curve. Retraining those 3
+costs ~70 GPU-minutes. The final resume registry has 8 rows (3 base, 5 LoRA), leaving 47 runs.
+
 `notebooks/kaggle_runner.ipynb` puts this together: setup, a throughput and peak-memory gate on the
 two most memory-hungry configs (full FT and LoRA r=64 on SQL), two-shard launch, a progress check,
 an oracle sweep over every full-FT run, and aggregation.
