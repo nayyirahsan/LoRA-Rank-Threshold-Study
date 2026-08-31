@@ -44,7 +44,7 @@ def test_gap_closure_and_r_star():
     assert lora.loc[1, "G"] == pytest.approx(0.25)
     assert lora.loc[16, "G"] == pytest.approx((0.885 - 0.1) / 0.8)
     row = rstar[rstar.arm == "lora"].iloc[0]
-    assert row.r_star == 16 and row.max_rank_tested == 64
+    assert row.r_star == 16 and row.max_rank_tested == 64 and row.min_rank_tested == 1
 
 
 def test_r_star_not_reached_is_none():

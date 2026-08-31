@@ -165,6 +165,8 @@ def r_star(curve_df: pd.DataFrame, threshold: float = THRESHOLD) -> pd.DataFrame
             "r_star": int(hit["rank"].iloc[0]) if len(hit) else None,
             "r_star_ci": int(strict["rank"].iloc[0]) if len(strict) else None,
             "max_rank_tested": int(g["rank"].max()),
+            # r* equal to this is a ceiling: the threshold was already met at the lowest rank tried
+            "min_rank_tested": int(g["rank"].min()),
             "min_seeds": int(g.n_seeds.min()),
         })
     return pd.DataFrame(rows)

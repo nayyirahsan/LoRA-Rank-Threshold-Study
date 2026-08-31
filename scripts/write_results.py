@@ -26,14 +26,26 @@ def _rank(value) -> int | None:
     return None if value is None or (isinstance(value, float) and math.isnan(value)) else int(value)
 
 
+def _ceiling(row) -> bool:
+    """r* at the lowest rank tried is an upper bound: the true threshold may be lower. The first real-data
+    run of this script reported "facts H1 fails: r* grows 4 -> 4" when 4 was the smallest rank tested."""
+    r = _rank(row.r_star)
+    return r is not None and r <= int(row.get("min_rank_tested", 1))
+
+
+def _fmt(row) -> str:
+    return f"≤ {_rank(row.r_star)}" if _ceiling(row) else f"= {_rank(row.r_star)}"
+
+
 def h1_sql(rstar: pd.DataFrame) -> tuple[str, str]:
     rows = rstar[(rstar.task == "sql") & (rstar.arm == "lora")]
     if rows.empty:
         return "not tested", "no SQL LoRA results"
-    r = _rank(rows.iloc[0].r_star)
+    row = rows.iloc[0]
+    r = _rank(row.r_star)
     if r is None:
-        return "fails", f"LoRA never reached {THRESHOLD:.0%} of full FT (max rank {int(rows.iloc[0].max_rank_tested)})"
-    return ("supported" if r <= 8 else "fails"), f"r* = {r} (prediction: ≤ 8)"
+        return "fails", f"LoRA never reached {THRESHOLD:.0%} of full FT (max rank {int(row.max_rank_tested)})"
+    return ("supported" if r <= 8 else "fails"), f"r* {_fmt(row)} (prediction: ≤ 8)"
 
 
 def h1_facts(rstar: pd.DataFrame) -> tuple[str, str]:
@@ -47,14 +59,21 @@ def h1_facts(rstar: pd.DataFrame) -> tuple[str, str]:
     if r_lo is None:
         return "inconclusive", f"threshold not reached even at N={lo.n:,}"
     if r_hi is None:
-        bound = hi.max_rank_tested * 2 / r_lo
+        bound = hi.max_rank_tested * 2 / r_lo  # true r_lo <= r_lo only makes growth larger
         verdict = "supported" if bound >= need else "inconclusive"
-        return verdict, (f"r* = {r_lo} at N={lo.n:,}; not reached by rank {int(hi.max_rank_tested)} at N={hi.n:,}, "
+        return verdict, (f"r* {_fmt(lo)} at N={lo.n:,}; not reached by rank {int(hi.max_rank_tested)} at N={hi.n:,}, "
                          f"so growth ≥ {bound:.0f}× for {n_ratio:.0f}× more facts (prediction: ≥ {need:.0f}×)")
+    if _ceiling(lo) and _ceiling(hi):
+        return "inconclusive", (
+            f"LoRA reaches {THRESHOLD:.0%} of full FT at the smallest tested rank ({int(hi.min_rank_tested)}) for every N "
+            f"from {lo.n:,} to {hi.n:,}: capacity never binds in the tested range, so growth can't be measured")
     growth = r_hi / r_lo
-    return ("supported" if growth >= need else "fails"), (
-        f"r* grows {r_lo} → {r_hi} ({growth:.0f}×) as N grows {lo.n:,} → {hi.n:,} ({n_ratio:.0f}×); "
-        f"prediction: ≥ {need:.0f}×")
+    text = (f"r* {_fmt(lo)} at N={lo.n:,} and {_fmt(hi)} at N={hi.n:,} ({n_ratio:.0f}× more facts); "
+            f"growth {'≥ ' if _ceiling(lo) else ''}{growth:.0f}×, prediction: ≥ {need:.0f}×")
+    if growth >= need:
+        return "supported", text
+    # With a ceiling at small N, the measured growth is only a lower bound, so it can't refute the prediction.
+    return ("inconclusive" if _ceiling(lo) else "fails"), text
 
 
 def h2a(rstar: pd.DataFrame, energy: dict) -> tuple[str, str]:

@@ -11,8 +11,28 @@ _spec.loader.exec_module(wr)
 
 
 def _rstar(rows):
-    base = {"epochs": 10.0, "n_eval": 1000, "max_steps": -1, "min_seeds": 1}
+    base = {"epochs": 10.0, "n_eval": 1000, "max_steps": -1, "min_seeds": 1, "min_rank_tested": 1}
     return pd.DataFrame([{**base, **r} for r in rows])
+
+
+def test_threshold_at_smallest_rank_is_a_ceiling():
+    # The real calibration data: ranks 4 and 64 only, r* = 4 at both N. The first version called this "fails".
+    both = _rstar([
+        {"task": "facts", "n": 1000, "arm": "lora", "r_star": 4, "r_star_ci": 4, "max_rank_tested": 64, "min_rank_tested": 4},
+        {"task": "facts", "n": 4000, "arm": "lora", "r_star": 4, "r_star_ci": 4, "max_rank_tested": 64, "min_rank_tested": 4},
+    ])
+    verdict, evidence = wr.h1_facts(both)
+    assert verdict == "inconclusive" and "never binds" in evidence
+
+    lo_only = _rstar([
+        {"task": "facts", "n": 250, "arm": "lora", "r_star": 1, "r_star_ci": 1, "max_rank_tested": 256},
+        {"task": "facts", "n": 4000, "arm": "lora", "r_star": 4, "r_star_ci": 4, "max_rank_tested": 256},
+    ])
+    verdict, evidence = wr.h1_facts(lo_only)  # growth >= 4x is only a lower bound; prediction needs >= 8x
+    assert verdict == "inconclusive" and "≤ 1" in evidence and "≥ 4×" in evidence
+
+    sql = _rstar([{"task": "sql", "n": 2000, "arm": "lora", "r_star": 1, "r_star_ci": 1, "max_rank_tested": 128}])
+    assert wr.h1_sql(sql) == ("supported", "r* ≤ 1 (prediction: ≤ 8)")
 
 
 def test_h1_sql_verdicts():
