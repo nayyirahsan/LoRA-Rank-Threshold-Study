@@ -84,6 +84,42 @@ def test_h2b_classifies_direction():
     assert "capacity" in wr.h2b(curves((0.5, 0.9, 1.0), (0.52, 0.88, 1.0)))[0][1]
 
 
+def _curves(diff_sign: float):
+    rows = []
+    for arm, gs in (("lora", (0.6, 0.9, 1.0)), ("oracle", tuple(g - diff_sign for g in (0.6, 0.9, 1.0)))):
+        rows += [{"task": "facts", "n": 4000, "epochs": 10.0, "n_eval": 1000, "max_steps": -1, "arm": arm,
+                  "rank": r, "G": g} for r, g in zip((1, 4, 16), gs)]
+    return pd.DataFrame(rows)
+
+
+def _bullet_rstar(sql_r, facts_r, facts_min=1):
+    return _rstar([
+        {"task": "sql", "n": 2000, "arm": "lora", "r_star": sql_r, "r_star_ci": sql_r, "max_rank_tested": 128},
+        {"task": "facts", "n": 250, "arm": "lora", "r_star": 1, "r_star_ci": 1, "max_rank_tested": 256},
+        {"task": "facts", "n": 4000, "arm": "lora", "r_star": facts_r, "r_star_ci": facts_r, "max_rank_tested": 256,
+         "min_rank_tested": facts_min},
+    ])
+
+
+def test_resume_bullet_uses_measured_values_and_largest_n():
+    text = wr.resume_bullet(_bullet_rstar(4, 16), _curves(0.3), n_runs=55)
+    assert "55-run" in text and "rank 4 on text-to-SQL" in text and "rank 16 for 4,000 injected facts" in text
+    assert "beats SVD-truncated full-FT updates" in text and "0.30" in text
+    assert "250" not in text  # only the largest N is quoted
+
+
+def test_resume_bullet_states_ceilings_and_misses_honestly():
+    text = wr.resume_bullet(_bullet_rstar(1, None), _curves(0.0), n_runs=None)
+    assert "rank 1 (the smallest tested) on text-to-SQL" in text
+    assert "no tested rank (up to 256) for 4,000 injected facts" in text
+    assert "consistent with a capacity limit" in text and "-run" not in text
+
+
+def test_resume_bullet_optimization_gap_direction():
+    text = wr.resume_bullet(_bullet_rstar(4, 16), _curves(-0.2), n_runs=55)
+    assert "optimization gap" in text and "0.20" in text
+
+
 def test_replace_section_is_idempotent():
     readme = f"# T\n\nintro\n\n{wr.START}\nold\n{wr.END}\n\n## Tail\n"
     once = wr.replace_section(readme, "## Results\nnew\n")

@@ -93,17 +93,28 @@ def h2a(rstar: pd.DataFrame, energy: dict) -> tuple[str, str]:
     return verdict, f"{hits}/{len(checks)} settings within 2×. {detail}"
 
 
+def _settings(curves: pd.DataFrame) -> list[tuple]:
+    keys = {tuple(r) for r in curves[SETTING].itertuples(index=False, name=None)}
+    return sorted(keys, key=lambda k: (k[0] != "facts", k[1]))
+
+
+def lora_minus_oracle(curves: pd.DataFrame, key: tuple) -> tuple[float | None, list[int]]:
+    """Mean G(LoRA) - G(oracle) over the ranks both arms measured in one setting."""
+    df = _in_setting(curves, key)
+    lora = df[(df.arm == "lora") & (df["rank"] >= 1)].set_index("rank").G
+    orc = df[(df.arm == "oracle") & (df["rank"] >= 1)].set_index("rank").G
+    shared = sorted(lora.index.intersection(orc.index))
+    if not shared:
+        return None, []
+    return float((lora[shared] - orc[shared]).mean()), [int(r) for r in shared]
+
+
 def h2b(curves: pd.DataFrame) -> list[tuple[str, str]]:
     out = []
-    keys = sorted({tuple(r) for r in curves[SETTING].itertuples(index=False, name=None)}, key=lambda k: (k[0] != "facts", k[1]))
-    for key in keys:
-        df = _in_setting(curves, key)
-        lora = df[(df.arm == "lora") & (df["rank"] >= 1)].set_index("rank").G
-        orc = df[(df.arm == "oracle") & (df["rank"] >= 1)].set_index("rank").G
-        shared = lora.index.intersection(orc.index)
-        if len(shared) == 0:
+    for key in _settings(curves):
+        diff, shared = lora_minus_oracle(curves, key)
+        if diff is None:
             continue
-        diff = float((lora[shared] - orc[shared]).mean())
         if diff > MARGIN:
             reading = "LoRA ≫ oracle: compact rank-r solutions exist that full FT didn't pick"
         elif diff < -MARGIN:
@@ -115,7 +126,45 @@ def h2b(curves: pd.DataFrame) -> list[tuple[str, str]]:
     return out
 
 
-def render(result: dict, fig_dir: Path, readme_dir: Path) -> str:
+def _rank_phrase(row) -> str:
+    r = _rank(row.r_star)
+    return f"rank {r} (the smallest tested)" if _ceiling(row) else f"rank {r}"
+
+
+def resume_bullet(rstar: pd.DataFrame, curves: pd.DataFrame, n_runs: int | None) -> str:
+    """One resume line built only from measured values. Thresholds met at the smallest tested rank are
+    stated as such, and the oracle clause follows the sign and size of the measured gap."""
+    findings = []
+    sql = rstar[(rstar.task == "sql") & (rstar.arm == "lora")]
+    if not sql.empty:
+        row = sql.iloc[0]
+        findings.append(f"{_rank_phrase(row)} on text-to-SQL" if _rank(row.r_star) is not None
+                        else f"no tested rank (up to {int(row.max_rank_tested)}) on text-to-SQL")
+    facts = rstar[(rstar.task == "facts") & (rstar.arm == "lora")].sort_values("n")
+    if not facts.empty:
+        row = facts.iloc[-1]
+        findings.append(f"{_rank_phrase(row)} for {int(row.n):,} injected facts" if _rank(row.r_star) is not None
+                        else f"no tested rank (up to {int(row.max_rank_tested)}) for {int(row.n):,} injected facts")
+    size = f"{n_runs}-run " if n_runs else ""
+    bullet = (f"Designed and ran a {size}LoRA rank × data-size study on Qwen3-0.6B against full fine-tuning "
+              f"on free Kaggle T4s; found LoRA recovers ≥{THRESHOLD:.0%} of full fine-tuning's gain at "
+              + " and ".join(findings or ["the tested ranks"]))
+    diffs = [d for d, _ in (lora_minus_oracle(curves, k) for k in _settings(curves)) if d is not None]
+    if diffs:
+        mean = sum(diffs) / len(diffs)
+        if mean > MARGIN:
+            bullet += (f", and that trained LoRA beats SVD-truncated full-FT updates of equal rank by {mean:.2f} mean "
+                       "gap closure: low-rank solutions exist that full fine-tuning doesn't find")
+        elif mean < -MARGIN:
+            bullet += (f", and diagnosed an optimization gap: SVD-truncated full-FT updates beat trained LoRA of "
+                       f"equal rank by {-mean:.2f} mean gap closure")
+        else:
+            bullet += (", and that SVD-truncated full-FT updates match trained LoRA at equal rank, "
+                       "consistent with a capacity limit")
+    return bullet + "."
+
+
+def render(result: dict, fig_dir: Path, readme_dir: Path, n_runs: int | None = None) -> str:
     rstar, curves, energy = result["r_star"], result["curves"], result.get("energy", {})
     seeds = int(curves.n_seeds.min()) if not curves.empty else 0
     lines = [
@@ -132,6 +181,8 @@ def render(result: dict, fig_dir: Path, readme_dir: Path) -> str:
         lines.append(f"| {name} | **{verdict}** | {evidence} |")
     lines += ["", "**H2b, oracle truncation vs trained LoRA:**", ""]
     lines += [f"- {label}: {text}" for label, text in h2b(curves)] or ["- not tested"]
+    lines += ["", "**Resume bullet** (generated from the numbers above):", "",
+              f"> {resume_bullet(rstar, curves, n_runs)}"]
     lines += ["", "### Thresholds", "", result["table"].strip(), ""]
     for name, caption in (("gap_closure.png", "Gap closure vs rank: trained LoRA and the SVD oracle, per setting"),
                           ("spectrum.png", "Share of the full-FT update's energy in its top-r directions"),
@@ -158,11 +209,13 @@ def main() -> None:
     ap.add_argument("--readme", default="README.md")
     args = ap.parse_args()
 
-    result = analyze(Registry(args.registry).rows(), args.out, args.figures)
+    rows = Registry(args.registry).rows()
+    result = analyze(rows, args.out, args.figures)
     if result["curves"].empty:
         raise SystemExit("no complete settings in the registry yet")
+    n_runs = sum(1 for r in rows if r["config"].get("kind", "train") == "train")
     readme = Path(args.readme)
-    section = render(result, Path(args.figures), readme.parent)
+    section = render(result, Path(args.figures), readme.parent, n_runs)
     readme.write_text(replace_section(readme.read_text(), section))
     print(section)
 
