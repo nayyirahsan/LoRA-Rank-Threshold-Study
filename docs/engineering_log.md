@@ -311,6 +311,21 @@ in-kernel oracle sweep needs each full-FT checkpoint on the session's local disk
 none, so facts N=1000 and N=4000 (1 seed) would have silently gotten no oracle curve. Retraining those 3
 costs ~70 GPU-minutes. The final resume registry has 8 rows (3 base, 5 LoRA), leaving 47 runs.
 
+## 16. A dry run on real data caught a misleading verdict
+Before `grid_final` finished, `scripts/write_results.py` was run on the combined `lr_cal` +
+`lr_cal_ext` registries, which have base, full-FT, and LoRA rows at ranks 4 and 64. It generated:
+**"H1, knowledge task: fails. r\* grows 4 → 4 (1×)"**. That is wrong. Rank 4 was the *smallest*
+rank tested, so LoRA meeting the threshold there only shows r\* ≤ 4 at both sizes. The data can't
+tell growth from no growth.
+**Fix:** `r_star` records `min_rank_tested`, and the writer reports such values as ceilings (`≤ r`):
+- saturation at the smallest rank for every N → **inconclusive** ("capacity never binds in the tested range")
+- a ceiling only at small N → growth is a lower bound, so it can support the prediction but can't refute it
+
+The same logic drives the generated resume bullet, which states thresholds met at the smallest
+tested rank as such ("rank 1 (the smallest tested)"). A rerun on the same data now reads "inconclusive"
+for facts and "r\* ≤ 4" for SQL. This matters for the final grid, where N=4000 saturation at r=4
+makes a threshold at r=1 plausible.
+
 `notebooks/kaggle_runner.ipynb` puts this together: setup, a throughput and peak-memory gate on the
 two most memory-hungry configs (full FT and LoRA r=64 on SQL), two-shard launch, a progress check,
 an oracle sweep over every full-FT run, and aggregation.
