@@ -28,9 +28,17 @@ def target_linears(model: nn.Module, targets=TARGET_MODULES) -> dict[str, nn.Lin
     }
 
 
+def _energy(singular_values: torch.Tensor) -> torch.Tensor:
+    # Squared singular values in float64 on the CPU. This is at most a few thousand numbers. With the SVD on
+    # CUDA, the searchsorted threshold used to be created on the CPU, and the first grid_final oracle
+    # sweep died on every run with a device-mismatch error. The move and the cast must be separate
+    # steps: a single .to("cpu", torch.float64) on an MPS tensor returned zeros (MPS has no float64).
+    return singular_values.detach().to("cpu").to(torch.float64).square()
+
+
 def energy_rank(singular_values: torch.Tensor, fraction: float = 0.9) -> int:
     """Smallest r whose top-r singular values hold `fraction` of the squared Frobenius norm."""
-    energy = singular_values.double().square()
+    energy = _energy(singular_values)
     total = energy.sum()
     if total == 0:
         return 0
@@ -39,7 +47,7 @@ def energy_rank(singular_values: torch.Tensor, fraction: float = 0.9) -> int:
 
 
 def energy_captured(singular_values: torch.Tensor, rank: int) -> float:
-    energy = singular_values.double().square()
+    energy = _energy(singular_values)
     total = energy.sum()
     return float(energy[:rank].sum() / total) if total > 0 else 1.0
 

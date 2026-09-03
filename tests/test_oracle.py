@@ -75,6 +75,23 @@ def test_weight_error_decreases_with_rank():
     assert torch.allclose(_logits(work), _logits(tuned), atol=1e-4)
 
 
+@pytest.mark.parametrize("device", ["cuda", "mps"])
+def test_energy_functions_accept_accelerator_tensors(device):
+    # Regression: grid_final's oracle ran the SVD on CUDA, and energy_rank failed with
+    # "Expected all tensors to be on the same device" on every full-FT run.
+    available = {"cuda": torch.cuda.is_available(), "mps": torch.backends.mps.is_available()}[device]
+    if not available:
+        pytest.skip(f"{device} not available")
+    s = torch.tensor([3.0, 1.0, 0.5, 0.1], device=device)
+    # energies 9, 1, 0.25, 0.01: rank 1 holds 87.7% (< 90%), rank 2 holds 97.5%
+    assert energy_rank(s, 0.9) == 2
+    assert energy_rank(s, 0.8) == 1
+    assert energy_captured(s, 2) == pytest.approx((9 + 1) / (9 + 1 + 0.25 + 0.01))
+    oracle_base = _tiny_qwen3().to(device)
+    oracle = DeltaSVD(oracle_base, _perturbed(_tiny_qwen3(), rank=3).to(device), device=device)
+    assert set(oracle.energy_ranks(0.999).values()) <= {1, 2, 3}
+
+
 def test_energy_rank_edge_cases():
     assert energy_rank(torch.tensor([1.0, 0.0, 0.0])) == 1
     assert energy_rank(torch.zeros(4)) == 0
