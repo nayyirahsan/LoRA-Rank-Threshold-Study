@@ -1,0 +1,39 @@
+# Oracle rerun for grid_final (docs/engineering_log.md #17).
+# grid_final trained all 55 runs, but its in-kernel oracle sweep died on a device-mismatch bug, and the
+# full-FT checkpoints the oracle needs were deleted with the session. This retrains exactly grid_final's
+# 6 full-FT configs (same run ids) so their checkpoints exist again. The kernel's oracle phase then
+# sweeps ranks for each one. No resume registry, so they retrain rather than being skipped.
+defaults:
+  model: Qwen/Qwen3-0.6B-Base
+  batch_size: 32
+  seed: 0
+
+blocks:
+  - task: sql
+    n: 2000
+    epochs: 2
+    n_eval: 500
+    method: [full]
+    seed: [0, 1, 2]
+    lr: {full: 1.0e-5}
+
+  - task: facts
+    n: 250
+    epochs: 10
+    n_eval: 250
+    method: [full]
+    lr: {full: 1.0e-5}
+
+  - task: facts
+    n: 1000
+    epochs: 10
+    n_eval: 500
+    method: [full]
+    lr: {full: 1.0e-5}
+
+  - task: facts
+    n: 4000
+    epochs: 10
+    n_eval: 1000
+    method: [full]
+    lr: {full: 1.0e-5}

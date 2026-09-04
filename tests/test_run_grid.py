@@ -43,6 +43,9 @@ def test_every_shipped_config_expands():
     assert counts["smoke.yaml"] == 4 and counts["lr_cal_ext.yaml"] == 9
     # SQL: base + 3 full + 8 ranks x 3 seeds = 28; facts per N: base + full + 7 ranks = 9, x 3 values of N = 27
     assert counts["grid_final.yaml"] == 55
+    # the oracle rerun must retrain exactly grid_final's full-FT configs, so the oracle rows attach to their run ids
+    final_full = {repr(c) for c in _load("grid_final.yaml") if c.method == "full"}
+    assert {repr(c) for c in _load("grid_final_oracle.yaml")} == final_full and len(final_full) == 6
 
 
 def _main(monkeypatch, tmp_path, fail_when, *extra):
