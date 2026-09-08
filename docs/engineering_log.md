@@ -326,6 +326,29 @@ tested rank as such ("rank 1 (the smallest tested)"). A rerun on the same data n
 for facts and "r\* ≤ 4" for SQL. This matters for the final grid, where N=4000 saturation at r=4
 makes a threshold at r=1 plausible.
 
+## 17. grid_final: every training run finished, the oracle sweep didn't
+Kaggle kernel, 2×T4, 201 min. The preflight and memory-gate fallback worked, and the resume step
+loaded the 8 reused rows. **All 47 new training runs finished** (shards: 160 and 195 min, no failures),
+so the registry has all 55. **The in-kernel oracle phase then failed on all 6 full-FT runs** with
+`RuntimeError: Expected all tensors to be on the same device ... searchsorted`, so there are no oracle
+or spectrum rows.
+
+**Cause:** `energy_rank` ran `torch.searchsorted(cumulative, torch.tensor(fraction))`. With
+`--svd-device cuda`, `cumulative` was on the GPU and the threshold on the CPU. Every oracle test and
+the laptop smoke run did the SVD on the CPU, so the bug never ran before Kaggle.
+**Fix:** energy math moves the singular values to CPU float64 first. That's at most a few thousand
+numbers, and it also avoids float64 on MPS. A regression test runs the energy functions and `DeltaSVD`
+on CUDA or MPS, whichever is available (MPS locally).
+
+**Recovery:** the checkpoints were deleted with the session, so `configs/grid_final_oracle.yaml`
+retrains exactly grid_final's 6 full-FT configs, with the same run ids (a test checks this). The
+kernel's oracle phase then sweeps ranks for each. Cost is ~80 min of training plus the oracle evals.
+**Merging:** in the final registry, the *retrained* full-FT rows replace grid_final's copies. The
+oracle truncates the retrained checkpoints, so its full-rank eval then matches the FT score it's
+normalized against. Seeds are fixed, but GPU kernels aren't bit-deterministic, so retrained scores can
+differ slightly from the first copies. The analysis of the 55 training runs (H1) doesn't depend on the
+oracle and was written to the README before the rerun.
+
 `notebooks/kaggle_runner.ipynb` puts this together: setup, a throughput and peak-memory gate on the
 two most memory-hungry configs (full FT and LoRA r=64 on SQL), two-shard launch, a progress check,
 an oracle sweep over every full-FT run, and aggregation.
