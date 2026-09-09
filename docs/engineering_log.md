@@ -349,6 +349,51 @@ normalized against. Seeds are fixed, but GPU kernels aren't bit-deterministic, s
 differ slightly from the first copies. The analysis of the 55 training runs (H1) doesn't depend on the
 oracle and was written to the README before the rerun.
 
+## 18. The headline result: rank-1 LoRA matches full FT everywhere tested, and why that makes sense
+`grid_final`, 55 runs:
+
+| Setting | Base | Full FT | LoRA r=1 | LoRA r=2…256 |
+|---|---|---|---|---|
+| SQL n=2000 (3 seeds, exec match) | 0.318 | 0.859 | 0.846 (G 0.98, CI [0.95, 1.00]) | G 0.98–1.01 |
+| Facts N=250 (held-out acc, 250 questions) | 0.000 | 1.000 | 0.964 | 0.980–0.992; **r=256: 0.932** |
+| Facts N=1000 (500 questions) | 0.000 | 1.000 | 1.000 | 0.992–1.000 |
+| Facts N=4000 (1000 questions) | 0.000 | 0.999 | 0.998 | 0.999–1.000 |
+
+**H1 as stated didn't come out.** SQL's r\* ≤ 1 is consistent with the "≤ 8" prediction. For facts,
+the threshold never appeared: rank 1 already reaches ≥ 96% gap closure at every N, so the prediction
+that r\* grows with N can't be tested at these sizes. That's a scale problem with the design, not
+evidence against the mechanism, and a capacity estimate says why:
+- **Adapter size at rank 1:** 22,528 parameters per layer (q 3072, k 2048, v 2048, o 3072, gate/up/down
+  4096 each) × 28 layers = **630,784** trainable parameters. That matches the measured 40,370,176 at r=64.
+- **Information to store:** each fact's value comes uniformly from its attribute pool (200 cities,
+  200 employers, 100 years, 100 universities, 20 majors), a mean of **6.58 bits** per fact. N=4000 needs
+  **≈ 26.3 kbits**.
+- **Capacity:** *Physics of Language Models 3.3* (Allen-Zhu & Li, 2024) measures ~2 bits per parameter for
+  sufficiently trained models, and closer to ~1 bit/param with ~100 exposures. Here each fact gets 40
+  exposures (4 templates × 10 epochs). At 1–2 bits/param, rank 1 holds **0.63–1.26 Mbits, 24–48× what
+  N=4000 needs**. Capacity at rank 1 would start to bind around **~10⁵ facts**.
+
+Caveats: that scaling law was measured for full models, not low-rank adapters on a frozen base, and
+fewer exposures lower it further. So this is an order-of-magnitude argument. It does turn the null
+result into a falsifiable claim.
+
+**The cheap way to test it (follow-up):** N ≈ 10⁵ facts would cost ~110M training tokens per run, which
+doesn't fit on free T4s. Shrinking the adapter instead makes capacity bind at small N: LoRA r=1 on a
+*single* projection in a *single* layer has ~3–4k parameters (≈ 3.5–7 kbits), so it should saturate
+around ~500–1000 facts. A sweep over adapter size (layers × modules × rank) at fixed N, looking for the
+knee where accuracy falls, tests the same mechanism for a few GPU-hours.
+
+**Smaller observations (1 seed, so hypotheses, not findings):**
+- **Facts N=250 at r=256 dips to 0.932** (r=4: 0.992; 250 questions, SE ≈ 1.6pp). Standard scaling
+  gives α/r = 16/256 = 0.0625, and N=250 has the fewest optimizer steps (~313) to make up for the small
+  updates. This fits the high-rank underfitting that rsLoRA addresses, but the rsLoRA ablation was cut
+  from this pass.
+- **SQL's r=1 lower CI bound sits right at the threshold** (0.95). "r\* ≤ 1" is supported, but narrowly.
+
+**A silent PyTorch pitfall, found while fixing #17:** on torch 2.14, `tensor_on_mps.to("cpu", torch.float64)`
+returns **all zeros** with no error. Moving to the CPU and then casting works. The first version of the
+oracle fix made exactly that one-step call; the MPS regression test caught it before it reached Kaggle.
+
 `notebooks/kaggle_runner.ipynb` puts this together: setup, a throughput and peak-memory gate on the
 two most memory-hungry configs (full FT and LoRA r=64 on SQL), two-shard launch, a progress check,
 an oracle sweep over every full-FT run, and aggregation.
