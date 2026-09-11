@@ -116,6 +116,19 @@ def test_analyze_writes_outputs_and_figures(tmp_path):
     assert all(p.stat().st_size > 10_000 for p in result["figures"])
 
 
+def test_rank_tick_labels():
+    # Few ticks: label all of them.
+    assert A.rank_tick_labels([1, 4, 16, 64, 256]) == ["1", "4", "16", "64", "256"]
+    # The real oracle ranks (no 512): every other tick, plus 1024, which is two octaves past "256".
+    assert A.rank_tick_labels([1, 2, 4, 8, 16, 32, 64, 128, 256, 1024]) == \
+        ["1", "", "4", "", "16", "", "64", "", "256", "1024"]
+    # A last tick only one octave past the previous label stays blank to avoid crowding.
+    assert A.rank_tick_labels([1, 2, 4, 8, 16, 32, 64, 128, 256, 512]) == \
+        ["1", "", "4", "", "16", "", "64", "", "256", ""]
+    # An odd count already labels the last tick.
+    assert A.rank_tick_labels([1, 2, 4, 8, 16, 32, 64, 128, 256])[-1] == "256"
+
+
 def test_empty_registry():
     result = A.analyze([], "/tmp/unused-out", "/tmp/unused-fig")
     assert result["curves"].empty

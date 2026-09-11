@@ -275,13 +275,26 @@ def _title(key: tuple) -> str:
     return f"Facts, N = {key[1]:,}" if key[0] == "facts" else f"Text-to-SQL, {key[1]:,} examples"
 
 
+def rank_tick_labels(ranks: list[int]) -> list[str]:
+    """Labels for log2 rank ticks. Past 8 ticks, label every other one so a narrow panel doesn't run
+    them together ("128256512"). The last tick is also labeled when it sits at least two octaves past
+    the previous label. The oracle ranks skip 512, so "1024" was left blank and the rightmost point
+    had no label."""
+    ranks = sorted(ranks)
+    if len(ranks) <= 8:
+        return [str(r) for r in ranks]
+    labels = [str(r) if i % 2 == 0 else "" for i, r in enumerate(ranks)]
+    last_labeled = max(i for i, label in enumerate(labels) if label)
+    if labels[-1] == "" and ranks[-1] >= 4 * ranks[last_labeled]:
+        labels[-1] = str(ranks[-1])
+    return labels
+
+
 def _rank_axis(ax, ranks) -> None:
     ranks = sorted({int(r) for r in ranks if r >= 1})
     ax.set_xscale("log", base=2)
     ax.set_xticks(ranks)
-    # Past 8 ticks the labels run together in a narrow panel ("128256512"). Keep every tick, label every other one.
-    thin = len(ranks) > 8
-    ax.set_xticklabels([str(r) if not thin or i % 2 == 0 else "" for i, r in enumerate(ranks)])
+    ax.set_xticklabels(rank_tick_labels(ranks))
     ax.minorticks_off()
     ax.set_xlabel("Rank r")
     ax.grid(axis="y", color=GRID, linewidth=0.8)
