@@ -394,6 +394,44 @@ knee where accuracy falls, tests the same mechanism for a few GPU-hours.
 returns **all zeros** with no error. Moving to the CPU and then casting works. The first version of the
 oracle fix made exactly that one-step call; the MPS regression test caught it before it reached Kaggle.
 
+## 19. The oracle sweep: full FT's update rank grows with data, but what LoRA needs doesn't
+`grid_final_oracle` retrained grid_final's 6 full-FT runs and swept oracle ranks
+{0, 1, 2, 4, …, 256, 1024} on each (2×T4, 92 min, no failures). Final registry: 55 training rows, 66
+oracle rows, 6 spectrum rows.
+
+**Sanity checks passed on real checkpoints:**
+- Rank 0 reproduces base exactly (facts 0.000, SQL 0.318).
+- Rank 1024 reproduces full FT (e.g. SQL seed 2: 0.868 = 0.868).
+- The retrained full-FT runs matched grid_final's originals exactly on all three facts sizes, and
+  within ±0.004 on SQL (seed 1: 0.864 vs 0.868; seed 2: 0.868 vs 0.864). Seeds are fixed, but GPU
+  kernels aren't bit-deterministic.
+
+| Setting | Oracle score at r = 1 / 4 / 16 / 64 / 128 | Oracle r\* | Median 90%-energy rank | LoRA r=1 |
+|---|---|---|---|---|
+| Facts N=250 | 0.020 / 0.080 / 0.480 / 0.984 / 0.996 | 64 | 127 | 0.964 |
+| Facts N=1000 | 0.000 / 0.058 / 0.418 / 0.954 / 0.996 | 64 | 192 | 1.000 |
+| Facts N=4000 | 0.003 / 0.021 / 0.174 / 0.851 / 0.994 | 128 | 268 | 0.998 |
+| SQL n=2000 (3 seeds) | ~0.45 / 0.58–0.73 / 0.82–0.84 / 0.85–0.87 / 0.85–0.87 | 32 | 181–192 | 0.846 |
+
+**Reading:**
+- **H2b: LoRA ≫ oracle in every setting.** Mean G(LoRA) − G(oracle) is +0.57, +0.63, +0.70 (facts)
+  and +0.24 (SQL). The gap is largest at low rank: at N=4000, rank-1 LoRA gets 0.998, while the rank-1
+  truncation of full FT's update gets 0.003.
+- **The growth H1 predicted is real, but it's in the full-FT update.** As N grows 16×, the energy rank
+  goes 127 → 192 → 268 and the oracle threshold 64 → 64 → 128. Attention projections carry the
+  lowest-rank updates and MLP down_proj the highest at every size (e.g. N=4000: k_proj 152, down_proj 396).
+  LoRA's threshold stays at rank 1 throughout.
+- **So full FT's update isn't a low-rank solution plus noise.** Its top singular direction alone
+  recovers almost nothing. The rank-1 solution LoRA finds is a different point in weight space, not a
+  truncation of the full-FT one.
+- **H2a as stated fails** (energy rank 127–268 vs LoRA r\* ≤ 1). The energy rank does track the oracle's
+  threshold: 2.0×, 3.0×, 2.1× high on facts and 5.7× on SQL. That's a statement about full FT, not LoRA.
+
+**Why this matters:** the "effective rank" of full fine-tuning updates is sometimes used to argue that
+LoRA needs higher rank (e.g. that full-FT deltas have far higher rank than typical LoRA configs). These
+results show that proxy can be off by two orders of magnitude, at least where capacity doesn't bind.
+Whether it stays wrong once capacity *does* bind is exactly what the adapter-shrinking follow-up in #18 tests.
+
 `notebooks/kaggle_runner.ipynb` puts this together: setup, a throughput and peak-memory gate on the
 two most memory-hungry configs (full FT and LoRA r=64 on SQL), two-shard launch, a progress check,
 an oracle sweep over every full-FT run, and aggregation.
